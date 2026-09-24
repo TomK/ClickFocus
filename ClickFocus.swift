@@ -23,8 +23,12 @@ let checkDelays: [TimeInterval] = [0.05, 0.15, 0.35]
 // start a focus fight.
 let maxCorrections = 3
 
+// Internal flag for the relaunches made while waiting for permission.
+let awaitingPermissionFlag = "--awaiting-permission"
+
 struct Options {
     var verbose = false
+    var awaitingPermission = false
     var bundleIds: Set<String> = []  // empty = all apps
 }
 
@@ -40,6 +44,8 @@ func parseOptions() -> Options {
             options.bundleIds = Set(list.split(separator: ",").map {
                 $0.trimmingCharacters(in: .whitespaces)
             })
+        case awaitingPermissionFlag:
+            options.awaitingPermission = true
         case "--version":
             print(version)
             exit(0)
@@ -273,15 +279,25 @@ let callback: CGEventTapCallBack = { _, type, event, _ in
     return Unmanaged.passUnretained(event)
 }
 
-let trusted = AXIsProcessTrustedWithOptions(
-    [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
-// A running process does not see the permission being granted, so exit and
-// rely on a relaunch (launchd's KeepAlive under `make install`).
-if !trusted {
-    log("Accessibility permission required (System Settings > Privacy & Security > "
-        + "Accessibility), restart ClickFocus once granted")
+// Ask for permission once, then wait for it. A running process does not see
+// the permission being granted, so ClickFocus re-executes itself to check
+// again, keeping its pid for launchd.
+if !AXIsProcessTrusted() {
+    if !options.awaitingPermission {
+        log("waiting for Accessibility permission (System Settings > Privacy & Security > Accessibility)")
+        AXIsProcessTrustedWithOptions(
+            [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
+    }
+    sleep(3)
+    var args = CommandLine.arguments
+    if !options.awaitingPermission { args.append(awaitingPermissionFlag) }
+    let path = Bundle.main.executablePath ?? args[0]
+    var argv = args.map { strdup($0) } + [nil]
+    execv(path, &argv)
+    log("unable to relaunch \(path): \(String(cString: strerror(errno)))")
     exit(1)
 }
+if options.awaitingPermission { log("Accessibility permission granted") }
 
 // Keep a hung app from stalling click handling.
 AXUIElementSetMessagingTimeout(systemWide, 0.25)
