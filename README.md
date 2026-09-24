@@ -25,6 +25,19 @@ Clicks inside the already active app are left alone.
 
 Requires macOS 13 or later and the Xcode command line tools.
 
+### Homebrew
+
+```sh
+brew install tomk/tap/clickfocus
+brew services start clickfocus
+```
+
+`brew services` starts ClickFocus at login and restarts it if it exits. It logs
+to `$(brew --prefix)/var/log/clickfocus.log`. Each upgrade is a new ad-hoc
+signed build, so macOS asks for Accessibility permission again afterwards.
+
+### From source
+
 ```sh
 make install
 ```
@@ -36,11 +49,8 @@ On first run macOS asks for Accessibility permission. Enable ClickFocus in
 System Settings > Privacy & Security > Accessibility; it notices within a few
 seconds and starts working.
 
-To remove it:
-
-```sh
-make uninstall
-```
+To remove it, run `make uninstall`, or `brew services stop clickfocus` and
+`brew uninstall clickfocus` for a Homebrew install.
 
 ## Keeping the permission across rebuilds
 
@@ -92,3 +102,7 @@ instead, and the time since the click:
 ```
 click 2: app focused "Tom - Google Chrome", focused "Work - Google Chrome" at 176ms
 ```
+
+## License
+
+MIT
