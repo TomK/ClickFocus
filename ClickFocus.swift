@@ -5,8 +5,8 @@
 // respond to activation by restoring their previously focused window, so the
 // window under the cursor loses focus to one elsewhere. ClickFocus watches
 // left mouse-down events without altering them, and if the app that owns the
-// clicked window re-focuses the window that was focused before the click, it
-// raises and focuses the clicked window again.
+// clicked window focuses one of its other existing windows instead, it raises
+// and focuses the clicked window again.
 
 import AppKit
 import ApplicationServices
@@ -129,20 +129,25 @@ func focus(_ window: AXUIElement, pid: pid_t) {
 
 // MARK: - Click handling
 
-// A click that activated an app, and the window that app had focused before it.
+// A click that activated an app, and the windows that app had at the time.
+// The app's focused window is not recorded: the click reaches the app while
+// it is being handled here, so the app may already report the clicked window
+// as focused before it restores its previous one.
 struct PendingClick {
     let id: Int
     let pid: pid_t
     let clicked: AXUIElement
-    let previous: AXUIElement
+    let existing: [AXUIElement]
 }
 
-var clickCount = 0
 var latestClickId = 0
 
 func handleMouseDown(at point: CGPoint) {
+    // Every click supersedes checks still pending for an earlier one.
+    latestClickId += 1
+
     // Clicks within the active app are left to it: a window it focuses there
-    // is one it chose, such as a newly opened window.
+    // is one it chose.
     let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
     guard let clicked = standardWindow(at: point), let pid = pid(of: clicked),
           pid != frontmost else {
@@ -156,16 +161,16 @@ func handleMouseDown(at point: CGPoint) {
         }
     }
 
-    guard let previous = focusedWindow(of: pid), !CFEqual(previous, clicked) else {
-        debug("click in \(title(clicked)): already the app's focused window")
-        return
+    let windows: [AXUIElement] = attribute(AXUIElementCreateApplication(pid), kAXWindowsAttribute) ?? []
+    let existing = windows.filter {
+        let subrole: String? = attribute($0, kAXSubroleAttribute)
+        return subrole == kAXStandardWindowSubrole && !CFEqual($0, clicked)
     }
+    guard !existing.isEmpty else { return }
 
-    clickCount += 1
-    let click = PendingClick(id: clickCount, pid: pid, clicked: clicked, previous: previous)
-    latestClickId = click.id
+    let click = PendingClick(id: latestClickId, pid: pid, clicked: clicked, existing: existing)
     debug("click \(click.id) in \(title(clicked)) of \(app?.localizedName ?? "pid \(pid)"), "
-        + "previously focused \(title(previous))")
+        + "focused \(title(focusedWindow(of: pid)))")
 
     for delay in checkDelays {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { check(click, after: delay) }
@@ -173,15 +178,15 @@ func handleMouseDown(at point: CGPoint) {
 }
 
 func check(_ click: PendingClick, after delay: TimeInterval) {
-    // A newer click supersedes this one.
     guard click.id == latestClickId,
           NSWorkspace.shared.frontmostApplication?.processIdentifier == click.pid,
           let focused = focusedWindow(of: click.pid) else {
         return
     }
 
-    if CFEqual(focused, click.previous) {
-        log("click \(click.id): app re-focused \(title(focused)) after \(Int(delay * 1000))ms, "
+    // A window the click opened is not in the existing list, so it keeps focus.
+    if click.existing.contains(where: { CFEqual($0, focused) }) {
+        log("click \(click.id): app focused \(title(focused)) after \(Int(delay * 1000))ms, "
             + "focusing \(title(click.clicked))")
         focus(click.clicked, pid: click.pid)
     } else {
