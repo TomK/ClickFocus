@@ -3,8 +3,9 @@ INSTALL_DIR := $(HOME)/Applications
 AGENT := $(HOME)/Library/LaunchAgents/com.tomk.ClickFocus.plist
 LOG := $(HOME)/Library/Logs/ClickFocus.log
 # Signing with a fixed certificate keeps the Accessibility permission across
-# rebuilds; "-" signs ad hoc.
-SIGN_IDENTITY ?= ClickFocus Code Signing
+# rebuilds. Without the certificate in the keychain, "-" signs ad hoc.
+CERT := ClickFocus Code Signing
+SIGN_IDENTITY ?= $(shell security find-identity -p codesigning | grep -q '"$(CERT)"' && echo '$(CERT)' || echo -)
 
 .PHONY: all run install uninstall clean
 
