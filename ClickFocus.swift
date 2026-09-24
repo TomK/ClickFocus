@@ -213,9 +213,12 @@ let callback: CGEventTapCallBack = { _, type, event, _ in
 
 let trusted = AXIsProcessTrustedWithOptions(
     [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
+// A running process does not see the permission being granted, so exit and
+// rely on a relaunch (launchd's KeepAlive under `make install`).
 if !trusted {
-    log("waiting for Accessibility permission (System Settings > Privacy & Security > Accessibility)")
-    while !AXIsProcessTrusted() { sleep(1) }
+    log("Accessibility permission required (System Settings > Privacy & Security > "
+        + "Accessibility), restart ClickFocus once granted")
+    exit(1)
 }
 
 // Keep a hung app from stalling click handling.
