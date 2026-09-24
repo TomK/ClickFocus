@@ -2,6 +2,9 @@ APP := ClickFocus.app
 INSTALL_DIR := $(HOME)/Applications
 AGENT := $(HOME)/Library/LaunchAgents/com.tomk.ClickFocus.plist
 LOG := $(HOME)/Library/Logs/ClickFocus.log
+# Signing with a fixed certificate keeps the Accessibility permission across
+# rebuilds; "-" signs ad hoc.
+SIGN_IDENTITY ?= ClickFocus Code Signing
 
 .PHONY: all run install uninstall clean
 
@@ -15,7 +18,7 @@ $(APP): ClickFocus Info.plist
 	mkdir -p $@/Contents/MacOS
 	cp Info.plist $@/Contents/
 	cp ClickFocus $@/Contents/MacOS/
-	codesign --force --sign - --identifier com.tomk.ClickFocus $@
+	codesign --force --sign "$(SIGN_IDENTITY)" --identifier com.tomk.ClickFocus $@
 
 run: $(APP)
 	$(APP)/Contents/MacOS/ClickFocus --verbose

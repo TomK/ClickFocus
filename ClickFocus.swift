@@ -11,10 +11,17 @@
 import AppKit
 import ApplicationServices
 
-let version = "0.1.0"
+let version = "0.2.0"
 
-// Delays after the mouse-down at which the focused window is checked.
+// How long after a mouse-down the app's focus changes are watched, and the
+// delays at which the focused window is also checked in case a change
+// notification is missed.
+let watchDuration: TimeInterval = 0.5
 let checkDelays: [TimeInterval] = [0.05, 0.15, 0.35]
+
+// Corrections allowed per click, so an app that keeps switching back cannot
+// start a focus fight.
+let maxCorrections = 3
 
 struct Options {
     var verbose = false
@@ -133,18 +140,33 @@ func focus(_ window: AXUIElement, pid: pid_t) {
 // The app's focused window is not recorded: the click reaches the app while
 // it is being handled here, so the app may already report the clicked window
 // as focused before it restores its previous one.
-struct PendingClick {
+final class PendingClick {
     let id: Int
     let pid: pid_t
+    let app: AXUIElement
     let clicked: AXUIElement
     let existing: [AXUIElement]
+    let start = Date()
+    var observer: AXObserver?
+    var corrections = 0
+
+    init(id: Int, pid: pid_t, clicked: AXUIElement, existing: [AXUIElement]) {
+        self.id = id
+        self.pid = pid
+        self.app = AXUIElementCreateApplication(pid)
+        self.clicked = clicked
+        self.existing = existing
+    }
+
+    var elapsed: String { "\(Int(Date().timeIntervalSince(start) * 1000))ms" }
 }
 
-var latestClickId = 0
+var clickCount = 0
+var pending: PendingClick?
 
 func handleMouseDown(at point: CGPoint) {
-    // Every click supersedes checks still pending for an earlier one.
-    latestClickId += 1
+    // Every click supersedes one still being watched.
+    stopWatching()
 
     // Clicks within the active app are left to it: a window it focuses there
     // is one it chose.
@@ -168,30 +190,70 @@ func handleMouseDown(at point: CGPoint) {
     }
     guard !existing.isEmpty else { return }
 
-    let click = PendingClick(id: latestClickId, pid: pid, clicked: clicked, existing: existing)
+    clickCount += 1
+    let click = PendingClick(id: clickCount, pid: pid, clicked: clicked, existing: existing)
+    pending = click
     debug("click \(click.id) in \(title(clicked)) of \(app?.localizedName ?? "pid \(pid)"), "
         + "focused \(title(focusedWindow(of: pid)))")
 
+    watchFocusChanges(click)
     for delay in checkDelays {
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { check(click, after: delay) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            if pending === click { check(click, trigger: "check") }
+        }
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + watchDuration) {
+        if pending === click { stopWatching() }
     }
 }
 
-func check(_ click: PendingClick, after delay: TimeInterval) {
-    guard click.id == latestClickId,
-          NSWorkspace.shared.frontmostApplication?.processIdentifier == click.pid,
+let focusChanged: AXObserverCallback = { _, _, _, _ in
+    if let click = pending { check(click, trigger: "focus change") }
+}
+
+func watchFocusChanges(_ click: PendingClick) {
+    var observer: AXObserver?
+    guard AXObserverCreate(click.pid, focusChanged, &observer) == .success, let observer,
+          AXObserverAddNotification(observer, click.app,
+              kAXFocusedWindowChangedNotification as CFString, nil) == .success else {
+        debug("click \(click.id): unable to observe focus changes")
+        return
+    }
+    CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
+    click.observer = observer
+}
+
+func stopWatching() {
+    if let click = pending, let observer = click.observer {
+        AXObserverRemoveNotification(observer, click.app, kAXFocusedWindowChangedNotification as CFString)
+        CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
+    }
+    pending = nil
+}
+
+func check(_ click: PendingClick, trigger: String) {
+    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == click.pid,
           let focused = focusedWindow(of: click.pid) else {
         return
     }
 
     // A window the click opened is not in the existing list, so it keeps focus.
-    if click.existing.contains(where: { CFEqual($0, focused) }) {
-        log("click \(click.id): app focused \(title(focused)) after \(Int(delay * 1000))ms, "
-            + "focusing \(title(click.clicked))")
-        focus(click.clicked, pid: click.pid)
-    } else {
-        debug("click \(click.id): focused \(title(focused)) after \(Int(delay * 1000))ms")
+    guard click.existing.contains(where: { CFEqual($0, focused) }) else {
+        debug("click \(click.id): focused \(title(focused)) at \(click.elapsed) (\(trigger))")
+        return
     }
+
+    guard click.corrections < maxCorrections else {
+        log("click \(click.id): app focused \(title(focused)) at \(click.elapsed) (\(trigger)), "
+            + "giving up after \(maxCorrections) corrections")
+        stopWatching()
+        return
+    }
+
+    click.corrections += 1
+    log("click \(click.id): app focused \(title(focused)) at \(click.elapsed) (\(trigger)), "
+        + "focusing \(title(click.clicked))")
+    focus(click.clicked, pid: click.pid)
 }
 
 // MARK: - Event tap
