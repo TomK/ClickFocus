@@ -32,9 +32,16 @@ brew install tomk/tap/clickfocus
 brew services start clickfocus
 ```
 
-`brew services` starts ClickFocus at login and restarts it if it exits. It logs
-to `$(brew --prefix)/var/log/clickfocus.log`. Each upgrade is a new ad-hoc
-signed build, so macOS asks for Accessibility permission again afterwards.
+`brew services` starts ClickFocus at login and restarts it if it exits.
+Upgrade with `brew upgrade clickfocus`. Each upgrade is a new ad-hoc signed
+build, so macOS asks for Accessibility permission again afterwards.
+
+To remove it:
+
+```sh
+brew services stop clickfocus
+brew uninstall clickfocus
+```
 
 ### From source
 
@@ -43,14 +50,15 @@ make install
 ```
 
 This builds `ClickFocus.app`, copies it to `~/Applications` and installs a
-LaunchAgent that starts it at login and restarts it if it exits.
+LaunchAgent that starts it at login and restarts it if it exits. Remove it with
+`make uninstall`.
+
+### Accessibility permission
 
 On first run macOS asks for Accessibility permission. Enable ClickFocus in
 System Settings > Privacy & Security > Accessibility; it notices within a few
-seconds and starts working.
-
-To remove it, run `make uninstall`, or `brew services stop clickfocus` and
-`brew uninstall clickfocus` for a Homebrew install.
+seconds and starts working. After an upgrade or rebuild that macOS treats as a
+new app, remove the old ClickFocus entry there and enable the new one.
 
 ## Keeping the permission across rebuilds
 
@@ -84,7 +92,15 @@ ClickFocus [--apps <bundleId,...>] [--verbose]
   --verbose  log every click that is inspected
 ```
 
-To run the installed agent with options, add them to `ProgramArguments` in
+The Homebrew service runs with the defaults. To try options, stop the service
+and run ClickFocus in the foreground:
+
+```sh
+brew services stop clickfocus
+ClickFocus --verbose
+```
+
+For a from-source install, add options to `ProgramArguments` in
 `~/Library/LaunchAgents/com.tomk.ClickFocus.plist`, then restart it:
 
 ```sh
@@ -95,7 +111,8 @@ launchctl kickstart -k gui/$(id -u)/com.tomk.ClickFocus
 
 ## Logs
 
-The installed agent logs to `~/Library/Logs/ClickFocus.log`. Each correction
+The Homebrew service logs to `$(brew --prefix)/var/log/clickfocus.log`, and a
+from-source install to `~/Library/Logs/ClickFocus.log`. Each correction
 is logged with the window the app focused, the window ClickFocus focused
 instead, and the time since the click:
 
