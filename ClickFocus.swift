@@ -11,13 +11,16 @@
 import AppKit
 import ApplicationServices
 
-let version = "0.4.0"
+let version = "0.4.1"
 
-// How long after a mouse-down the clicked app's focused window is watched,
-// and how often it is checked. Polling needs no setup when the click lands;
-// registering for focused-window-changed notifications then waits on the app
-// while it is busy activating.
+// How long the clicked app's focused window is watched once the app is
+// active, how long a click waits for the app to become active, and how often
+// both are checked. Activation can take over half a second on a busy system.
+// Polling needs no setup when the click lands; registering for
+// focused-window-changed notifications then waits on the app while it is busy
+// activating.
 let watchDuration: TimeInterval = 0.5
+let activationTimeout: TimeInterval = 3
 let pollInterval: TimeInterval = 0.01
 
 // Corrections allowed per click, so an app that keeps switching back cannot
@@ -175,6 +178,7 @@ final class PendingClick {
     let clickedId: CGWindowID
     let existingIds: Set<CGWindowID>
     let start: Date
+    var activated: Date?
     var clicked: AXUIElement?
     var timer: Timer?
     var corrections = 0
@@ -255,13 +259,21 @@ func stopWatching() {
 
 func check(_ click: PendingClick) {
     guard pending === click else { return }
-    guard click.elapsed < watchDuration else {
+    let active = NSWorkspace.shared.frontmostApplication?.processIdentifier == click.pid
+    if active && click.activated == nil { click.activated = Date() }
+
+    if let activated = click.activated, Date().timeIntervalSince(activated) >= watchDuration {
         note(click, "done") { "done" }
         stopWatching()
         return
     }
+    if click.activated == nil && click.elapsed >= activationTimeout {
+        note(click, "done") { "done, app never became active" }
+        stopWatching()
+        return
+    }
 
-    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == click.pid else {
+    guard active else {
         note(click, "inactive") { "app not active" }
         return
     }
