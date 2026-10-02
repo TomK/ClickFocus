@@ -1,7 +1,7 @@
 APP := ClickFocus.app
 INSTALL_DIR := $(HOME)/Applications
+INSTALLED := $(INSTALL_DIR)/$(APP)
 AGENT := $(HOME)/Library/LaunchAgents/com.tomk.ClickFocus.plist
-LOG := $(HOME)/Library/Logs/ClickFocus.log
 # Signing with a fixed certificate keeps the Accessibility permission across
 # rebuilds. Without the certificate in the keychain, "-" signs ad hoc.
 CERT := ClickFocus Code Signing
@@ -24,18 +24,23 @@ $(APP): ClickFocus Info.plist
 run: $(APP)
 	$(APP)/Contents/MacOS/ClickFocus --verbose
 
+# Opening the installed app makes it a login item. Earlier versions installed
+# a LaunchAgent instead, which is removed.
 install: $(APP)
+	-pkill -f '$(INSTALLED)/Contents/MacOS/ClickFocus'
 	-launchctl bootout gui/$$(id -u) $(AGENT) 2>/dev/null
-	mkdir -p $(INSTALL_DIR) $(dir $(AGENT))
-	rm -rf $(INSTALL_DIR)/$(APP)
+	rm -f $(AGENT)
+	mkdir -p $(INSTALL_DIR)
+	rm -rf $(INSTALLED)
 	cp -R $(APP) $(INSTALL_DIR)/
-	sed -e 's|__APP__|$(INSTALL_DIR)/$(APP)|' -e 's|__LOG__|$(LOG)|' com.tomk.ClickFocus.plist > $(AGENT)
-	launchctl bootstrap gui/$$(id -u) $(AGENT)
+	open $(INSTALLED)
 
 uninstall:
-	-launchctl bootout gui/$$(id -u) $(AGENT)
+	-$(INSTALLED)/Contents/MacOS/ClickFocus --login-item off
+	-pkill -f '$(INSTALLED)/Contents/MacOS/ClickFocus'
+	-launchctl bootout gui/$$(id -u) $(AGENT) 2>/dev/null
 	rm -f $(AGENT)
-	rm -rf $(INSTALL_DIR)/$(APP)
+	rm -rf $(INSTALLED)
 
 clean:
 	rm -rf ClickFocus $(APP)

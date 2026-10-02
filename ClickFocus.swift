@@ -10,8 +10,9 @@
 
 import AppKit
 import ApplicationServices
+import ServiceManagement
 
-let version = "0.4.1"
+let version = "0.5.0"
 
 // How long the clicked app's focused window is watched once the app is
 // active, how long a click waits for the app to become active, and how often
@@ -33,6 +34,7 @@ let awaitingPermissionFlag = "--awaiting-permission"
 struct Options {
     var verbose = false
     var awaitingPermission = false
+    var loginItem: String?  // on, off or status
     var bundleIds: Set<String> = []  // empty = all apps
 }
 
@@ -48,6 +50,11 @@ func parseOptions() -> Options {
             options.bundleIds = Set(list.split(separator: ",").map {
                 $0.trimmingCharacters(in: .whitespaces)
             })
+        case "--login-item":
+            guard let command = args.next(), ["on", "off", "status"].contains(command) else {
+                usage(exitCode: 2)
+            }
+            options.loginItem = command
         case awaitingPermissionFlag:
             options.awaitingPermission = true
         case "--version":
@@ -68,9 +75,12 @@ func usage(exitCode: Int32) -> Never {
     ClickFocus \(version)
 
     usage: ClickFocus [--apps <bundleId,...>] [--verbose]
+           ClickFocus --login-item <on|off|status>
 
-      --apps     only act on these apps, e.g. com.google.Chrome (default: all apps)
-      --verbose  log every click that is inspected
+      --apps        only act on these apps, e.g. com.google.Chrome (default: all apps)
+      --verbose     log every click that is inspected
+      --login-item  start ClickFocus at login, stop doing so, or show whether it does.
+                    Opening ClickFocus.app turns this on.
     """)
     exit(exitCode)
 }
@@ -336,6 +346,77 @@ let callback: CGEventTapCallBack = { _, type, event, _ in
         break
     }
     return Unmanaged.passUnretained(event)
+}
+
+// MARK: - Startup
+
+// The launchd job running ClickFocus, such as a Homebrew service. Processes
+// that LaunchServices starts (Finder, `open`, a login item) and terminal
+// processes report "0".
+let launchdJob: String? = {
+    let name = ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"] ?? "0"
+    return name == "0" || name.hasPrefix("application.") ? nil : name
+}()
+
+// Opened as an app rather than run by a launchd job or from a terminal.
+let openedAsApp = launchdJob == nil && getppid() == 1
+
+func loginItemStatus() -> String {
+    switch SMAppService.mainApp.status {
+    case .enabled: return "on"
+    case .notRegistered: return "off"
+    case .requiresApproval: return "waiting for approval in System Settings > General > Login Items"
+    case .notFound: return "unavailable for \(Bundle.main.bundlePath)"
+    @unknown default: return "unknown"
+    }
+}
+
+if let command = options.loginItem {
+    do {
+        switch command {
+        case "on": try SMAppService.mainApp.register()
+        case "off": try SMAppService.mainApp.unregister()
+        default: break
+        }
+    } catch {
+        print("unable to turn the login item \(command): \(error.localizedDescription)")
+        exit(1)
+    }
+    print("login item: \(loginItemStatus())")
+    exit(0)
+}
+
+// An opened app has nowhere to write output, so it logs to a file.
+if openedAsApp {
+    let path = NSHomeDirectory() + "/Library/Logs/ClickFocus.log"
+    freopen(path, "a", stdout)
+    freopen(path, "a", stderr)
+}
+
+// One ClickFocus per user, since a login item and a launchd job can both start
+// it. A launchd job waits for the running one to exit: exiting would only have
+// launchd start it again. The lock is released on exec, so the relaunches
+// below take it again.
+let lock = open(NSTemporaryDirectory() + "ClickFocus.lock", O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+if lock >= 0 && flock(lock, LOCK_EX | LOCK_NB) != 0 {
+    if launchdJob == nil {
+        log("ClickFocus is already running")
+        exit(0)
+    }
+    if !options.awaitingPermission { log("waiting for the running ClickFocus to exit") }
+    flock(lock, LOCK_EX)
+}
+
+// Opening the app means wanting it running, so it starts itself at login.
+// Before its first registration the app's status can read as not found.
+let loginItemSet = [.enabled, .requiresApproval].contains(SMAppService.mainApp.status)
+if openedAsApp && !loginItemSet {
+    do {
+        try SMAppService.mainApp.register()
+        log("login item: \(loginItemStatus())")
+    } catch {
+        log("unable to add the login item: \(error.localizedDescription)")
+    }
 }
 
 // Ask for permission once, then wait for it. A running process does not see

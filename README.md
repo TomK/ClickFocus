@@ -49,9 +49,9 @@ brew uninstall clickfocus
 make install
 ```
 
-This builds `ClickFocus.app`, copies it to `~/Applications` and installs a
-LaunchAgent that starts it at login and restarts it if it exits. Remove it with
-`make uninstall`.
+This builds `ClickFocus.app`, copies it to `~/Applications` and opens it.
+Opening the app adds it to System Settings > General > Login Items so it starts
+at login. Remove it with `make uninstall`.
 
 ### Accessibility permission
 
@@ -87,10 +87,16 @@ Pass `SIGN_IDENTITY=<name>` to `make` to sign with a different identity.
 
 ```
 ClickFocus [--apps <bundleId,...>] [--verbose]
+ClickFocus --login-item <on|off|status>
 
-  --apps     only act on these apps, e.g. com.google.Chrome (default: all apps)
-  --verbose  log every click that is inspected
+  --apps        only act on these apps, e.g. com.google.Chrome (default: all apps)
+  --verbose     log every click that is inspected
+  --login-item  start ClickFocus at login, stop doing so, or show whether it does.
+                Opening ClickFocus.app turns this on.
 ```
+
+Only one ClickFocus runs at a time. A second copy opened as an app exits; one
+started by a Homebrew service waits for the running copy to exit.
 
 The Homebrew service runs with the defaults. To try options, stop the service
 and run ClickFocus in the foreground:
@@ -100,11 +106,12 @@ brew services stop clickfocus
 ClickFocus --verbose
 ```
 
-For a from-source install, add options to `ProgramArguments` in
-`~/Library/LaunchAgents/com.tomk.ClickFocus.plist`, then restart it:
+For a from-source install, quit the running copy and run it from the app
+bundle:
 
 ```sh
-launchctl kickstart -k gui/$(id -u)/com.tomk.ClickFocus
+pkill -f ClickFocus.app/Contents/MacOS/ClickFocus
+~/Applications/ClickFocus.app/Contents/MacOS/ClickFocus --verbose
 ```
 
 `make run` builds and runs ClickFocus in the foreground with `--verbose`.
